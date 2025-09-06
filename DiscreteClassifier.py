@@ -243,7 +243,6 @@ class DL_input_data(Dataset):
         if self.cnn:
             lengths = torch.tensor(np.array([len(w) for w in input]), dtype=torch.long)
             max_len = max(lengths).item()
-            print('MAX: ' + str(max_len))
             num_channels = input[0].shape[1]
             num_samples = input[0].shape[2] if len(input[0].shape) > 2 else 1 
             padded_emg = np.zeros((len(input), max_len, num_channels, num_samples))
