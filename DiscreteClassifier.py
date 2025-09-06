@@ -4,6 +4,7 @@ import torch
 import numpy as np
 import random
 import pickle
+from torch.utils.data import DataLoader, Dataset
 
 """
 This is a basic Discrete classifier that goes from EMG to prediction. It uses cross entropy loss to 
@@ -24,7 +25,7 @@ class DiscreteClassifier(nn.Module):
             'tr_acc_a': [],
             'te_acc_a': [],
         }
-        self.min_loss = 100000
+        self.min_loss = 0
 
         dropout = 0.2 
 
@@ -57,16 +58,17 @@ class DiscreteClassifier(nn.Module):
         elif type == 'GRU':
             self.temporal = nn.GRU(conv_out_size, temporal_hidden_size, num_layers=temporal_layers, batch_first=True, dropout=dropout)
         elif type == 'TRANSFORMER':
-            self.pos_encoder = PositionalEncoding(conv_out_size)
+            self.input_projection = nn.Linear(conv_out_size, temporal_hidden_size)
+            self.pos_encoder = PositionalEncoding(temporal_hidden_size)
             self.temporal = nn.Sequential(
-                nn.LayerNorm(conv_out_size),
+                nn.LayerNorm(temporal_hidden_size),
                 nn.TransformerEncoder(
                     nn.TransformerEncoderLayer(
-                        d_model=conv_out_size, nhead=8, dim_feedforward=temporal_hidden_size, dropout=dropout, batch_first=True
+                        d_model=temporal_hidden_size, nhead=8, dim_feedforward=temporal_hidden_size*4, dropout=dropout, batch_first=True
                     ),
-                    num_layers=3
+                    num_layers=temporal_layers
                 ),
-                nn.LayerNorm(conv_out_size)
+                nn.LayerNorm(temporal_hidden_size)
             )
         else:
             print("Invalid selection of model type.")
@@ -123,6 +125,7 @@ class DiscreteClassifier(nn.Module):
         # out, _ = self.temporal(emg, (h0, c0))
 
         if isinstance(self.temporal, nn.Sequential):
+            emg = self.input_projection(emg)
             emg = self.pos_encoder(emg)
             out = self.temporal(emg)
         else:
@@ -186,10 +189,10 @@ class DiscreteClassifier(nn.Module):
             self.eval()
             te_loss, te_acc, te_acc_a = self._run_epoch(device, te_dl, optimizer, loss_function, train=False)
 
-            if np.mean(te_loss) < self.min_loss:
-                print("Improved validation loss... Saving model.")
+            if np.mean(te_acc) > self.min_loss:
+                print("Improved testing accuracy... Saving model.")
                 torch.save(self, 'Results/' + self.file_name + '.model')
-                self.min_loss = np.mean(te_loss)
+                self.min_loss = np.mean(te_acc)
 
             scheduler.step()
 
@@ -207,13 +210,6 @@ class DiscreteClassifier(nn.Module):
 
         if self.file_name is not None:
             pickle.dump(self.log, open('Results/' + self.file_name + '.pkl', 'wb'))
-    
-    def predict(self, x, device='cpu'):
-        self.to(device)
-        if type(x) != torch.Tensor:
-            x = torch.tensor(x, dtype=torch.float32)
-        preds = self.forward(x.to(device))
-        return np.array([p.argmax().item() for p in preds])
 
 
 def fix_random_seed(seed_value, use_cuda=True):
@@ -234,3 +230,56 @@ class PositionalEncoding(nn.Module):
     def forward(self, x):
         x = x + self.pe[:, :x.size(1)].to(x.device)
         return x
+    
+class DL_input_data(Dataset):
+    def __init__(self, windows, classes, cnn=False):
+        self.cnn = cnn
+        data, lengths = self.buffer(windows)
+        self.data = data
+        self.lengths = lengths
+        self.classes = torch.tensor(classes, dtype=torch.long)
+
+    def buffer(self, input):
+        if self.cnn:
+            lengths = torch.tensor(np.array([len(w) for w in input]), dtype=torch.long)
+            max_len = max(lengths).item()
+            print('MAX: ' + str(max_len))
+            num_channels = input[0].shape[1]
+            num_samples = input[0].shape[2] if len(input[0].shape) > 2 else 1 
+            padded_emg = np.zeros((len(input), max_len, num_channels, num_samples))
+            for i, e in enumerate(input):
+                padded_emg[i, 0:e.shape[0], :, :] = e 
+        else: 
+            lengths = torch.tensor(np.array([len(w) for w in input]), dtype=torch.long)
+            padded_emg = np.zeros((len(input), max(lengths).item(), input[0].shape[1])) 
+            for i, e in enumerate(input):
+                padded_emg[i, 0:e.shape[0], :] = e
+        return torch.tensor(padded_emg, dtype=torch.float32), lengths
+
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+        data = self.data[idx]
+        label = self.classes[idx]
+        length = self.lengths[idx]
+        return data, label, length
+
+    def __len__(self):
+        return self.data.shape[0]
+
+def make_data_loader(windows, classes, batch_size=64, cnn=False, shuffle=True):
+    obj = DL_input_data(windows, classes, cnn)
+    dl = DataLoader(obj,
+    batch_size=batch_size,
+    shuffle=shuffle) 
+    return dl
+
+def fix_random_seed(seed_value, use_cuda=True):
+    np.random.seed(seed_value)  # cpu vars
+    torch.manual_seed(seed_value)  # cpu  vars
+    random.seed(seed_value)  # Python
+    if use_cuda:
+        torch.cuda.manual_seed(seed_value)
+        torch.cuda.manual_seed_all(seed_value)  # gpu vars
+        torch.backends.cudnn.deterministic = True  # needed
+        torch.backends.cudnn.benchmark = False
