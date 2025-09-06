@@ -191,7 +191,7 @@ class DiscreteClassifier(nn.Module):
 
             if np.mean(te_acc) > self.min_loss:
                 print("Improved testing accuracy... Saving model.")
-                torch.save(self, 'Results/' + self.file_name + '.model')
+                torch.save(self, self.file_name + '.model')
                 self.min_loss = np.mean(te_acc)
 
             scheduler.step()
@@ -209,7 +209,7 @@ class DiscreteClassifier(nn.Module):
         self.eval()
 
         if self.file_name is not None:
-            pickle.dump(self.log, open('Results/' + self.file_name + '.pkl', 'wb'))
+            pickle.dump(self.log, open(self.file_name + '.pkl', 'wb'))
 
 
 def fix_random_seed(seed_value, use_cuda=True):
