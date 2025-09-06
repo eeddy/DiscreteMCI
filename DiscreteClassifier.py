@@ -118,12 +118,6 @@ class DiscreteClassifier(nn.Module):
         return out  
 
     def forward_temporal(self, emg, lengths=None):
-        # Resetting LSTM Memory - I don't find it really matters online because randomization from batches 
-        # batch_size = emg.shape[0]
-        # h0 = torch.zeros(3, batch_size, 256).to(emg.device)
-        # c0 = torch.zeros(3, batch_size, 256).to(emg.device)
-        # out, _ = self.temporal(emg, (h0, c0))
-
         if isinstance(self.temporal, nn.Sequential):
             emg = self.input_projection(emg)
             emg = self.pos_encoder(emg)
@@ -210,6 +204,13 @@ class DiscreteClassifier(nn.Module):
 
         if self.file_name is not None:
             pickle.dump(self.log, open(self.file_name + '.pkl', 'wb'))
+
+    def predict(self, x, device='cpu'):
+        self.to(device)
+        if type(x) != torch.Tensor:
+            x = torch.tensor(x, dtype=torch.float32)
+        preds = self.forward_once(x.to(device))
+        return np.array([p.argmax().item() for p in preds])
 
 
 def fix_random_seed(seed_value, use_cuda=True):
