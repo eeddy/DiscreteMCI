@@ -15,6 +15,7 @@ class DiscreteClassifier(nn.Module):
         super().__init__()
         
         fix_random_seed(0)
+        
         self.cnn = cnn
         self.file_name = file_name
         self.log = {
@@ -57,24 +58,11 @@ class DiscreteClassifier(nn.Module):
             self.temporal = nn.RNN(conv_out_size, temporal_hidden_size, num_layers=temporal_layers, batch_first=True, dropout=dropout, nonlinearity='relu')
         elif type == 'GRU':
             self.temporal = nn.GRU(conv_out_size, temporal_hidden_size, num_layers=temporal_layers, batch_first=True, dropout=dropout)
-        elif type == 'TRANSFORMER':
-            self.input_projection = nn.Linear(conv_out_size, temporal_hidden_size)
-            self.pos_encoder = PositionalEncoding(temporal_hidden_size)
-            self.temporal = nn.Sequential(
-                nn.LayerNorm(temporal_hidden_size),
-                nn.TransformerEncoder(
-                    nn.TransformerEncoderLayer(
-                        d_model=temporal_hidden_size, nhead=8, dim_feedforward=temporal_hidden_size*4, dropout=dropout, batch_first=True
-                    ),
-                    num_layers=temporal_layers
-                ),
-                nn.LayerNorm(temporal_hidden_size)
-            )
         else:
             print("Invalid selection of model type.")
             exit(1)
 
-        emg_output_shape = self.forward_temporal(conv_out).numel()
+        emg_output_shape = self.forward_temporal(conv_out).shape[-1]
 
         self.initial_layer = nn.Linear(emg_output_shape, mlp_layers[0])
         self.layer1 = nn.Linear(mlp_layers[0], mlp_layers[1])
@@ -118,18 +106,7 @@ class DiscreteClassifier(nn.Module):
         return out  
 
     def forward_temporal(self, emg, lengths=None):
-        # Resetting LSTM Memory - I don't find it really matters online because randomization from batches 
-        # batch_size = emg.shape[0]
-        # h0 = torch.zeros(3, batch_size, 256).to(emg.device)
-        # c0 = torch.zeros(3, batch_size, 256).to(emg.device)
-        # out, _ = self.temporal(emg, (h0, c0))
-
-        if isinstance(self.temporal, nn.Sequential):
-            emg = self.input_projection(emg)
-            emg = self.pos_encoder(emg)
-            out = self.temporal(emg)
-        else:
-            out, _ = self.temporal(emg)
+        out, _ = self.temporal(emg)
 
         if lengths is not None:
             out = torch.stack([s[lengths[i]-1] for i,s in enumerate(out)])
@@ -211,26 +188,13 @@ class DiscreteClassifier(nn.Module):
         if self.file_name is not None:
             pickle.dump(self.log, open(self.file_name + '.pkl', 'wb'))
 
+    def predict(self, x, device='cpu'):
+        self.to(device)
+        if type(x) != torch.Tensor:
+            x = torch.tensor(x, dtype=torch.float32)
+        preds = self.forward_once(x.to(device))
+        return np.array([p.argmax().item() for p in preds])
 
-def fix_random_seed(seed_value, use_cuda=True):
-    np.random.seed(seed_value)  # cpu vars
-    torch.manual_seed(seed_value)  # cpu  vars
-    random.seed(seed_value)  # Python
-    if use_cuda:
-        torch.cuda.manual_seed(seed_value)
-        torch.cuda.manual_seed_all(seed_value)  # gpu vars
-        torch.backends.cudnn.deterministic = True  # needed
-        torch.backends.cudnn.benchmark = False
-
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=400):
-        super().__init__()
-        self.pe = nn.Parameter(torch.randn(1, max_len, d_model)) # Learnable parameters
-
-    def forward(self, x):
-        x = x + self.pe[:, :x.size(1)].to(x.device)
-        return x
-    
 class DL_input_data(Dataset):
     def __init__(self, windows, classes, cnn=False):
         self.cnn = cnn
