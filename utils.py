@@ -4,6 +4,7 @@ from os import walk
 import random 
 import pickle
 import json 
+import os 
 
 gesture_mapping = {'noGesture': 0, 'fist': 1, 'waveIn': 2, 'waveOut': 3, 'open': 4, 'pinch': 5}
 
