@@ -11,19 +11,22 @@ This is a basic Discrete classifier that goes from EMG to prediction. It uses cr
 optimize its performance on predicting the correct active class.
 """
 class DiscreteClassifier(nn.Module):
-    def __init__(self, emg_size, cnn=True, file_name=None, temporal_hidden_size=128, temporal_layers=3, mlp_layers=[128, 64, 32], n_classes=6, type='GRU', conv_kernel_sizes = [3, 3, 3], conv_out_channels=[16, 32, 64]):
+    def __init__(self, emg_size, cnn=True, file_name=None, temporal_hidden_size=128, temporal_layers=3, mlp_layers=[128, 64, 32], n_classes=5, type='GRU', conv_kernel_sizes = [3, 3, 3], conv_out_channels=[16, 32, 64]):
         super().__init__()
         
         fix_random_seed(0)
         self.cnn = cnn
         self.file_name = file_name
+        self.threshold = 0.5
         self.log = {
             'tr_loss': [],
             'te_loss': [],
-            'tr_acc': [],
-            'te_acc': [],
-            'tr_acc_a': [],
-            'te_acc_a': [],
+            'tr_precision': [],
+            'te_precision': [],
+            'tr_recall': [],
+            'te_recall': [],
+            'tr_micro_f1': [],
+            'te_micro_f1': [],
         }
         self.min_loss = 0
 
@@ -133,30 +136,40 @@ class DiscreteClassifier(nn.Module):
     
     def _run_epoch(self, device, dl, optimizer, loss_function, train=False):
         loss_arr = []
-        acc_arr = []
-        acc_a_arr = [] 
+        precisions, recalls, f1s = [], [], []
+
         for data, labels, lengths in dl:
             optimizer.zero_grad()
             data = data.to(device)
-            labels = labels.to(device)
+            labels = labels.to(device)  # float32 multi-hot, shape [B, C]
             lengths = lengths.to(device)
-           
-            output = self.forward_once(data, lengths)
 
-            loss = loss_function(output, labels) 
+            logits = self.forward_once(data, lengths)        # [B, C], raw logits
+            loss = loss_function(logits, labels)             # BCEWithLogitsLoss
             loss_arr.append(loss.item())
 
-            acc = sum(torch.argmax(output,1) == labels)/labels.shape[0]
-            acc_arr.append(acc.item())
-            acc_a = sum((torch.argmax(output, 1) == labels) & (labels != 0)) / sum(labels != 0)
-            acc_a_arr.append(acc_a.item())
-            
+            # Metrics: thresholded predictions
+            preds = (torch.sigmoid(logits) >= self.threshold).float()
+
+            # Micro precision/recall/F1 over all labels
+            tp = (preds * labels).sum().item()
+            fp = (preds * (1 - labels)).sum().item()
+            fn = ((1 - preds) * labels).sum().item()
+
+            precision = tp / (tp + fp + 1e-8)
+            recall    = tp / (tp + fn + 1e-8)
+            f1        = 2 * precision * recall / (precision + recall + 1e-8)
+
+            precisions.append(precision)
+            recalls.append(recall)
+            f1s.append(f1)
+
             if train:
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.parameters(), 1) # Needs to be on for Transformer 
+                torch.nn.utils.clip_grad_norm_(self.parameters(), 1)  # keep for Transformer
                 optimizer.step()
 
-        return loss_arr, acc_arr, acc_a_arr
+        return loss_arr, precisions, recalls, f1s
 
     def fit(self, tr_dl, te_dl, learning_rate=1e-4, epochs=20):
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -173,34 +186,43 @@ class DiscreteClassifier(nn.Module):
         
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-        loss_function = nn.CrossEntropyLoss()
+        loss_function = nn.BCEWithLogitsLoss()
 
         # now start the training
         for epoch in range(0, epochs):
-            #training set
+            # train
             self.train()
-            tr_loss, tr_acc, tr_acc_a = self._run_epoch(device, tr_dl, optimizer, loss_function, train=True)
-            self.eval()
-            te_loss, te_acc, te_acc_a = self._run_epoch(device, te_dl, optimizer, loss_function, train=False)
+            tr_loss, tr_prec, tr_rec, tr_f1 = self._run_epoch(device, tr_dl, optimizer, loss_function, train=True)
 
-            if np.mean(te_acc) > self.min_loss:
-                print("Improved testing accuracy... Saving model.")
-                torch.save(self, self.file_name + '.model')
-                self.min_loss = np.mean(te_acc)
+            # eval
+            self.eval()
+            te_loss, te_prec, te_rec, te_f1 = self._run_epoch(device, te_dl, optimizer, loss_function, train=False)
+
+            # model selection on micro-F1
+            mean_te_f1 = np.mean(te_f1)
+            if mean_te_f1 > self.best_metric:
+                print("Improved testing F1... Saving model.")
+                if self.file_name is not None:
+                    torch.save(self, self.file_name + '.model')
+                self.best_metric = mean_te_f1
 
             scheduler.step()
 
-            # Log everything 
+            # Log everything
             self.log['tr_loss'].append(np.mean(tr_loss))
             self.log['te_loss'].append(np.mean(te_loss))
-            self.log['tr_acc'].append(np.mean(tr_acc))
-            self.log['te_acc'].append(np.mean(te_acc))
-            self.log['tr_acc_a'].append(np.mean(tr_acc_a))
-            self.log['te_acc_a'].append(np.mean(te_acc_a))
+            self.log['tr_precision'].append(np.mean(tr_prec))
+            self.log['te_precision'].append(np.mean(te_prec))
+            self.log['tr_recall'].append(np.mean(tr_rec))
+            self.log['te_recall'].append(np.mean(te_rec))
+            self.log['tr_micro_f1'].append(np.mean(tr_f1))
+            self.log['te_micro_f1'].append(np.mean(te_f1))
 
-            print(f"{epoch}: trloss:{np.mean(tr_loss):.4f} tracc:{np.mean(tr_acc):.4f} tracc_a:{np.mean(tr_acc_a):.4f} teloss:{np.mean(te_loss):.4f} teacc:{np.mean(te_acc):.4f} teacc_a:{np.mean(te_acc_a):.4f}")
+            print(f"{epoch}: "
+                f"trloss:{np.mean(tr_loss):.4f} trP:{np.mean(tr_prec):.4f} trR:{np.mean(tr_rec):.4f} trF1:{np.mean(tr_f1):.4f} "
+                f"teloss:{np.mean(te_loss):.4f} teP:{np.mean(te_prec):.4f} teR:{np.mean(te_rec):.4f} teF1:{np.mean(te_f1):.4f}")
 
-        self.eval()
+            self.eval()
 
         if self.file_name is not None:
             pickle.dump(self.log, open(self.file_name + '.pkl', 'wb'))
@@ -238,7 +260,20 @@ class DL_input_data(Dataset):
         data, lengths = self.buffer(windows)
         self.data = data
         self.lengths = lengths
-        self.classes = torch.tensor(classes, dtype=torch.long)
+
+        # Multi Hot Labels: 
+
+        class_indices = np.asarray(classes, dtype=int)
+        N = class_indices.shape[0]
+        out = np.zeros((N, 5), dtype=np.float32)
+
+        for i, c in enumerate(class_indices):
+            if c == 0:
+                continue  # all zeros = null
+            else:
+                out[i, c-1] = 1.0  # shift down by 1 since we dropped null
+                
+        self.classes = torch.tensor(out, dtype=torch.float32)
 
     def buffer(self, input):
         if self.cnn:
@@ -267,7 +302,7 @@ class DL_input_data(Dataset):
     def __len__(self):
         return self.data.shape[0]
 
-def make_data_loader(windows, classes, batch_size=64, cnn=False, shuffle=True):
+def make_data_loader(windows, classes, batch_size=512, cnn=False, shuffle=True):
     obj = DL_input_data(windows, classes, cnn)
     dl = DataLoader(obj,
     batch_size=batch_size,
