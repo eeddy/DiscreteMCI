@@ -18,7 +18,7 @@ class DiscreteClassifier(nn.Module):
         self.cnn = cnn
         self.file_name = file_name
         self.threshold = 0.5
-        self.best_metric = 0
+        self.best_metric = 
         self.log = {
             'tr_loss': [],
             'te_loss': [],
@@ -140,7 +140,6 @@ class DiscreteClassifier(nn.Module):
         precisions, recalls, f1s = [], [], []
 
         for data, labels, lengths in dl:
-            print("Batch size:", data.shape[0])
             optimizer.zero_grad()
             data = data.to(device)
             labels = labels.to(device)  # float32 multi-hot, shape [B, C]
