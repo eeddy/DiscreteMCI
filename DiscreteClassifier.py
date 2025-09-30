@@ -18,7 +18,7 @@ class DiscreteClassifier(nn.Module):
         self.cnn = cnn
         self.file_name = file_name
         self.threshold = 0.5
-        self.best_metric = 
+        self.best_metric = 0
         self.log = {
             'tr_loss': [],
             'te_loss': [],
