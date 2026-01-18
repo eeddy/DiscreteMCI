@@ -3,8 +3,6 @@ import time
 from utils import get_data
 from utils import *
 from DiscreteClassifier import DiscreteClassifier, make_data_loader
-from libemg.offline_metrics import OfflineMetrics
-from utils import * 
 
 adl_data = load_disco_adls()
 
@@ -29,7 +27,6 @@ for i in nm_idxs:
 WINDOW_SIZE = 10 
 INCREMENT_SIZE = 5
 MODEL = "GRU"
-CNN = True 
 LAYERS = 3 
 
 # Updat this if you want to use handcrafted features 
@@ -38,16 +35,16 @@ adl_feats = get_features(adl_data, WINDOW_SIZE, INCREMENT_SIZE, None, None)
 
 # Split Dataset 
 train_split = 0.95 
-validation_split = 0.05
+test_split = 0.05
 
 train_labels = labels_all[0:int(len(labels_all)*train_split)]
-test_labels = labels_all[-int(validation_split*len(labels_all)):]
+test_labels = labels_all[-int(test_split*len(labels_all)):]
 train_emg = emg_feats[0:int(len(emg_feats)*train_split)]
-test_emg = emg_feats[-int(validation_split*len(emg_feats)):]
+test_emg = emg_feats[-int(test_split*len(emg_feats)):]
 
 # Add ADL data
 adl_train = adl_feats[0:int(len(adl_feats) * train_split)]
-adl_test  = adl_feats[-int(len(adl_feats) * validation_split):]
+adl_test  = adl_feats[-int(len(adl_feats) * test_split):]
 train_labels = np.hstack([train_labels, np.zeros(len(adl_train))])
 train_emg = np.hstack([train_emg, adl_train])
 test_labels = np.hstack([test_labels, np.zeros(len(adl_test))])
@@ -55,7 +52,7 @@ test_emg = np.hstack([test_emg, adl_test])
 
 # Fit Discrete  classifier
 print("Fitting Discrete Classifier...")
-classifier = DiscreteClassifier(train_emg[0].shape, type=MODEL, cnn=CNN, temporal_layers=LAYERS, file_name='Discrete_' + str(time.time()))
-tr_dl = make_data_loader(train_emg, train_labels, cnn=CNN)
-te_dl = make_data_loader(test_emg, test_labels, cnn=CNN)
+classifier = DiscreteClassifier(train_emg[0].shape, type=MODEL, temporal_layers=LAYERS, file_name='Discrete_' + str(time.time()))
+tr_dl = make_data_loader(train_emg, train_labels)
+te_dl = make_data_loader(test_emg, test_labels)
 classifier.fit(tr_dl, te_dl, learning_rate=1e-3, epochs=100)

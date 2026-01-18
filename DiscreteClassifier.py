@@ -11,12 +11,11 @@ This is a basic Discrete classifier that goes from EMG to prediction. It uses cr
 optimize its performance on predicting the correct active class.
 """
 class DiscreteClassifier(nn.Module):
-    def __init__(self, emg_size, cnn=True, file_name=None, temporal_hidden_size=128, temporal_layers=3, mlp_layers=[128, 64, 32], n_classes=6, type='GRU', conv_kernel_sizes = [3, 3, 3], conv_out_channels=[16, 32, 64]):
+    def __init__(self, emg_size, file_name=None, temporal_hidden_size=128, temporal_layers=3, mlp_layers=[128, 64, 32], n_classes=6, type='GRU', conv_kernel_sizes = [3, 3, 3], conv_out_channels=[16, 32, 64]):
         super().__init__()
         
         fix_random_seed(0)
         
-        self.cnn = cnn
         self.file_name = file_name
         self.log = {
             'tr_loss': [],
@@ -30,25 +29,20 @@ class DiscreteClassifier(nn.Module):
 
         dropout = 0.2 
 
-        if self.cnn:
-            self.conv_layers = nn.ModuleList()
-            in_channels = emg_size[1]  # Channels in EMG signal
-            for i in range(len(conv_out_channels)):
-                self.conv_layers.append(nn.Conv1d(in_channels=in_channels, out_channels=conv_out_channels[i], kernel_size=conv_kernel_sizes[i], padding='same'))
-                self.conv_layers.append(nn.BatchNorm1d(conv_out_channels[i]))
-                self.conv_layers.append(nn.ReLU())
-                self.conv_layers.append(nn.MaxPool1d(kernel_size=2))
-                self.conv_layers.append(nn.Dropout(dropout))
-                in_channels = conv_out_channels[i] 
+        self.conv_layers = nn.ModuleList()
+        in_channels = emg_size[1]  # Channels in EMG signal
+        for i in range(len(conv_out_channels)):
+            self.conv_layers.append(nn.Conv1d(in_channels=in_channels, out_channels=conv_out_channels[i], kernel_size=conv_kernel_sizes[i], padding='same'))
+            self.conv_layers.append(nn.BatchNorm1d(conv_out_channels[i]))
+            self.conv_layers.append(nn.ReLU())
+            self.conv_layers.append(nn.MaxPool1d(kernel_size=2))
+            self.conv_layers.append(nn.Dropout(dropout))
+            in_channels = conv_out_channels[i] 
 
         spoof_emg_input = torch.zeros((1, *emg_size))
-        if self.cnn:
-            conv_out = self.forward_conv(spoof_emg_input)
-            conv_out_size = conv_out.shape[-1] 
-        else:
-            conv_out_size = emg_size[1]
-            conv_out = spoof_emg_input
-        
+        conv_out = self.forward_conv(spoof_emg_input)
+        conv_out_size = conv_out.shape[-1] 
+
         # Set the temporal feature extraction piece
         if type == 'LSTM':
             self.temporal = nn.LSTM(conv_out_size, temporal_hidden_size, num_layers=temporal_layers, batch_first=True, dropout=dropout)
@@ -97,10 +91,7 @@ class DiscreteClassifier(nn.Module):
 
 
     def forward_once(self, emg, emg_len=None):
-        if self.cnn:
-            out = self.forward_conv(emg)
-        else:
-            out = emg 
+        out = self.forward_conv(emg)
         out = self.forward_temporal(out, emg_len)
         out = self.forward_mlp(out)
         return out  
@@ -196,27 +187,21 @@ class DiscreteClassifier(nn.Module):
         return np.array([p.argmax().item() for p in preds])
 
 class DL_input_data(Dataset):
-    def __init__(self, windows, classes, cnn=False):
-        self.cnn = cnn
+    def __init__(self, windows, classes):
         data, lengths = self.buffer(windows)
         self.data = data
         self.lengths = lengths
         self.classes = torch.tensor(classes, dtype=torch.long)
 
     def buffer(self, input):
-        if self.cnn:
-            lengths = torch.tensor(np.array([len(w) for w in input]), dtype=torch.long)
-            max_len = max(lengths).item()
-            num_channels = input[0].shape[1]
-            num_samples = input[0].shape[2] if len(input[0].shape) > 2 else 1 
-            padded_emg = np.zeros((len(input), max_len, num_channels, num_samples))
-            for i, e in enumerate(input):
-                padded_emg[i, 0:e.shape[0], :, :] = e 
-        else: 
-            lengths = torch.tensor(np.array([len(w) for w in input]), dtype=torch.long)
-            padded_emg = np.zeros((len(input), max(lengths).item(), input[0].shape[1])) 
-            for i, e in enumerate(input):
-                padded_emg[i, 0:e.shape[0], :] = e
+        lengths = torch.tensor(np.array([len(w) for w in input]), dtype=torch.long)
+        max_len = max(lengths).item()
+        num_channels = input[0].shape[1]
+        num_samples = input[0].shape[2] if len(input[0].shape) > 2 else 1 
+        padded_emg = np.zeros((len(input), max_len, num_channels, num_samples))
+        for i, e in enumerate(input):
+            padded_emg[i, 0:e.shape[0], :, :] = e 
+
         return torch.tensor(padded_emg, dtype=torch.float32), lengths
 
     def __getitem__(self, idx):
@@ -230,8 +215,8 @@ class DL_input_data(Dataset):
     def __len__(self):
         return self.data.shape[0]
 
-def make_data_loader(windows, classes, batch_size=64, cnn=False, shuffle=True):
-    obj = DL_input_data(windows, classes, cnn)
+def make_data_loader(windows, classes, batch_size=64, shuffle=True):
+    obj = DL_input_data(windows, classes)
     dl = DataLoader(obj,
     batch_size=batch_size,
     shuffle=shuffle) 
